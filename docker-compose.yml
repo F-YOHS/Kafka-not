@@ -1,0 +1,138 @@
+version: "3.9"
+
+services:
+  zookeeper:
+    image: confluentinc/cp-zookeeper:latest
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+    networks:
+      - kafka-network
+
+  kafka:
+    image: confluentinc/cp-kafka:7.3.0
+    depends_on:
+      - zookeeper
+    environment:
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+    ports:
+      - "9092:9092"
+    networks:
+      - kafka-network
+    healthcheck:
+      test: ["CMD", "kafka-broker-api-versions", "--bootstrap-server", "localhost:9092"]
+      interval: 10s
+      timeout: 20s
+      retries: 15
+      start_period: 60s
+
+  kafka-setup:
+    image: confluentinc/cp-kafka:7.3.0
+    volumes:
+      - ./create_topics.sh:/create_topics.sh
+    environment:
+      KAFKA_BROKERS: kafka:9092
+      KAFKA_TOPIC_USER_EVENTS: user-events
+      KAFKA_TOPIC_PAYMENT_EVENTS: payment-events
+      KAFKA_TOPIC_NOTIFICATION_EVENTS: notification-events
+      KAFKA_TOPIC_ANALYTICS_EVENTS: analytics-events
+      REPLICATION_FACTOR: 1
+      PARTITIONS: 3
+    command: ["bash", "-c", "/create_topics.sh"]
+    depends_on:
+      kafka:
+        condition: service_healthy
+    networks:
+      - kafka-network
+
+  user-service:
+    build: ./userService
+    image: user-service
+    ports:
+      - "8080:8080"
+    environment:
+      KAFKA_BROKERS: kafka:9092
+      KAFKA_TOPIC_USER_EVENTS: user-events
+      KAFKA_TOPIC_ANALYTICS_EVENTS: analytics-events
+      ENVIRONMENT: development
+      LOG_LEVEL: info
+    depends_on:
+      kafka-setup:
+        condition: service_started
+    networks:
+      - kafka-network
+    restart: unless-stopped
+
+  email-service:
+    build: ./emailService
+    image: email-service
+    environment:
+      KAFKA_BROKERS: kafka:9092
+      KAFKA_TOPIC_NOTIFICATION_EVENTS: notification-events
+      EMAIL_SERVICE_GROUP: email-service-group
+      ENVIRONMENT: development
+      LOG_LEVEL: info
+    depends_on:
+      kafka:
+        condition: service_healthy
+      kafka-setup:
+        condition: service_started
+    networks:
+      - kafka-network
+    restart: unless-stopped
+
+  sms-service:
+    build: ./smsService
+    image: sms-service
+    environment:
+      KAFKA_BROKERS: kafka:9092
+      KAFKA_TOPIC_NOTIFICATION_EVENTS: notification-events
+      SMS_SERVICE_GROUP: sms-service-group
+      ENVIRONMENT: development
+      LOG_LEVEL: info
+    depends_on:
+      kafka:
+        condition: service_healthy
+      kafka-setup:
+        condition: service_started
+    networks:
+      - kafka-network
+    restart: unless-stopped
+
+  analytics-service:
+    build: ./analyticsService
+    image: analytics-service
+    environment:
+      KAFKA_BROKERS: kafka:9092
+      KAFKA_TOPIC_USER_EVENTS: user-events
+      KAFKA_TOPIC_PAYMENT_EVENTS: payment-events
+      KAFKA_TOPIC_ANALYTICS_EVENTS: analytics-events
+      ANALYTICS_SERVICE_GROUP: analytics-service-group
+      ENVIRONMENT: development
+      LOG_LEVEL: info
+    depends_on:
+      kafka:
+        condition: service_healthy
+      kafka-setup:
+        condition: service_started
+    networks:
+      - kafka-network
+    restart: unless-stopped
+  kafdrop:
+    image: obsidiandynamics/kafdrop:latest
+    ports:
+    - "9000:9000"
+    environment:
+      KAFKA_BROKERCONNECT: "kafka:9092"
+    depends_on:
+    - kafka
+    networks:
+    - kafka-network
+  
+
+networks:
+  kafka-network:
+    driver: bridge
+
